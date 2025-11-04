@@ -78,6 +78,6 @@ jobs:
           push: true
           # Le tag utilise le secret DOCKER_USERNAME pour le nom d'utilisateur
           tags: ${{ secrets.DOCKER_USERNAME }}/gestparc-app:latest
-          # Note: Assurez-vous d'avoir un Dockerfile à la racine de votre projet.
+          # IMPORTANT: Assurez-vous d'avoir un Dockerfile à la racine de votre projet.
           
       # -----------------------------------------------------------
