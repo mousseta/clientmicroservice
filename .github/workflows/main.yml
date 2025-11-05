@@ -1,42 +1,73 @@
+# ======================================================================
+# NOM DU WORKFLOW
+# Définit le nom qui apparaîtra dans l'interface GitHub Actions.
+# ======================================================================
 name: Java CI with Maven
 
+# ======================================================================
+# ÉVÉNEMENTS DÉCLENCHEURS (TRIGGERS)
+# Définit les événements qui lanceront ce workflow.
+# Il s'exécutera lors d'un 'push' ou d'une 'pull_request' ciblant la branche 'main'.
+# ======================================================================
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 
+# ======================================================================
+# DÉFINITION DES JOBS
+# Contient les tâches à exécuter. Ici, un seul job nommé 'build'.
+# ======================================================================
 jobs:
   build:
+    # ------------------------------------------------------------------
+    # RUNNER
+    # Spécifie que le job doit s'exécuter sur un runner auto-hébergé.
+    # ------------------------------------------------------------------
     runs-on: self-hosted
 
+    # ------------------------------------------------------------------
+    # SERVICES (DÉPENDANCES CONTENEURISÉES)
+    # Démarre un conteneur MySQL pour les tests d'intégration.
+    # ------------------------------------------------------------------
     services:
       mysql:
         image: mysql:8.0
         env:
+          # Variables nécessaires à l'initialisation de la base de données
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: gestparc_db
           MYSQL_USER: admin
           MYSQL_PASSWORD: 123456
         ports:
+          # Mappe le port du conteneur au port du runner pour l'accès
           - 3306:3306
         options: >-
+          # Configuration du health check pour s'assurer que MySQL est prêt
           --health-cmd="mysqladmin ping -h localhost -uroot -proot"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
 
+    # ======================================================================
+    # ÉTAPES D'EXÉCUTION (STEPS)
+    # Liste des commandes et actions à exécuter séquentiellement.
+    # ======================================================================
     steps:
       - name: Checkout code
+        # Télécharge le code source du dépôt
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
+        # Installe la version 17 du JDK (Temurin recommandé)
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Wait for MySQL
+        # Script Bash pour attendre que le service MySQL soit accessible via ping
         run: |
           echo "Waiting for MySQL to start..."
           for i in {1..10}; do
@@ -48,39 +79,51 @@ jobs:
             sleep 5
           done
 
-      - name: Build with Maven
-        run: mvn -B package --file pom.xml
+      - name: Compile Code (mvn compile)
+        # Étape 1 : Vérifie uniquement la validité du code source et sa compilation.
+        run: mvn -B compile --file pom.xml
+
+      - name: Run Unit and Integration Tests (mvn test)
+        # Étape 2 : Exécute tous les tests unitaires et d'intégration.
+        run: mvn -B test --file pom.xml
         env:
+          # Variables d'environnement pour la connexion aux tests
           SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/gestparc_db
           SPRING_DATASOURCE_USERNAME: admin
           SPRING_DATASOURCE_PASSWORD: 123456
-          
-      # --- NOUVELLES ÉTAPES DOCKER POUR LE BUILD ET LE PUSH (Méthode manuelle) ---
+
+      - name: Package Application (mvn package)
+        # Étape 3 : Crée l'artefact final (JAR ou WAR) si les tests ont réussi.
+        run: mvn -B package --file pom.xml
+        
+      # ------------------------------------------------------------------
+      # ÉTAPES DE LIVRAISON (DOCKER BUILD & PUSH)
+      # Ces étapes sont conditionnelles et s'exécutent uniquement sur 'main'.
+      # ------------------------------------------------------------------
 
       - name: Set up Docker Buildx
         if: github.ref == 'refs/heads/main'
+        # Configure l'outil Docker Buildx pour une construction avancée
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
         if: github.ref == 'refs/heads/main'
-        # Utilisation de la version v2 de login-action, comme suggéré
+        # Authentifie le runner pour pouvoir pousser l'image
         uses: docker/login-action@v2 
         with:
           username: ${{ secrets.DOCKER_USERNAME }} 
-          password: ${{ secrets.DOCKER_PASSWORD }}   
+          password: ${{ secrets.DOCKER_PASSWORD }} 
           
       - name: Build Docker image
         if: github.ref == 'refs/heads/main'
-        # Construit l'image localement avec un tag temporaire
+        # Construit l'image Docker en utilisant le Dockerfile du dépôt
         run: docker build -t gestparc-app:local .
 
       - name: Tag and Push Docker image to Docker Hub
-        # Cette étape s'exécute uniquement sur la branche main
         if: github.ref == 'refs/heads/main'
+        # Tag l'image avec le nom de dépôt complet et la pousse sur Docker Hub
         run: |
-          # 1. Tag l'image locale avec le nom du dépôt Docker Hub (username/repo:tag)
+          # Tag : utilise le secret DOCKER_USERNAME et le tag 'latest'
           docker tag gestparc-app:local ${{ secrets.DOCKER_USERNAME }}/gestparc-app:latest
-          # 2. Pousse l'image vers Docker Hub
+          # Push : envoie l'image tagguée au registre
           docker push ${{ secrets.DOCKER_USERNAME }}/gestparc-app:latest
-          
-      # -----------------------------------------------------------
