@@ -28,71 +28,72 @@ jobs:
     # ------------------------------------------------------------------
     runs-on: self-hosted
 
-    # ------------------------------------------------------------------
-    # SERVICES (DÉPENDANCES CONTENEURISÉES)
-    # Démarre un conteneur MySQL pour les tests d'intégration.
-    # ------------------------------------------------------------------
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          # (Vos variables d'environnement sont bien gérées ici)
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: gestparc_db
-          MYSQL_USER: admin
-          MYSQL_PASSWORD: 123456
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h localhost -uroot -proot"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-    # ======================================================================
-    # ÉTAPES D'EXÉCUTION (STEPS)
-    # Liste des commandes et actions à exécuter séquentiellement.
-    # ======================================================================
+# ... (Partie on: et jobs: build: runs-on: self-hosted)
+
+# 🛑 ATTENTION : SUPPRIMEZ INTÉGRALEMENT LE BLOC 'services:' DU WORKFLOW
+
     steps:
       - name: Checkout code
-        # Télécharge le code source du dépôt
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------------
+      # NOUVELLE ÉTAPE : CRÉER LE RÉSEAU (si nécessaire)
+      # ------------------------------------------------------------------
+      - name: Setup Docker Network
+        run: docker network create spring-net || true
+        # '|| true' évite l'échec si le réseau existe déjà (pour les tests locaux/retry)
+
+      # ------------------------------------------------------------------
+      # NOUVELLE ÉTAPE : DÉMARRAGE DU CONTENEUR MYSQL 
+      # ------------------------------------------------------------------
+      - name: Start MySQL Container
+        run: |
+          docker run -d \
+            --name mysql-spring \
+            --network spring-net \
+            -p 3306:3306 \
+            -e MYSQL_ALLOW_EMPTY_PASSWORD=yes \
+            -e MYSQL_DATABASE=gestparc_db \
+            -v ${{ github.workspace }}/init.sql:/docker-entrypoint-initdb.d/init.sql \
+            -v mysql_data:/var/lib/mysql \
+            mysql:8
+        # Utilisez 'github.workspace' pour référencer le chemin absolu de 'init.sql'
+
       - name: Set up JDK 17
-        # Installe la version 17 du JDK (Temurin recommandé)
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-
+          
       - name: Wait for MySQL
-        # Script Bash pour attendre que le service MySQL soit accessible via ping
+        # Le ping doit cibler le conteneur, mais puisque le port 3306 est exposé, l'attente locale fonctionne.
         run: |
           echo "Waiting for MySQL to start..."
           for i in {1..10}; do
-            if mysqladmin ping -h127.0.0.1 -uroot -proot --silent; then
+            # Utilise l'accès local car le port 3306 est exposé (-p 3306:3306)
+            if mysqladmin ping -h127.0.0.1 -uroot --silent; then
               echo "MySQL is up!"
               break
             fi
             echo "Waiting..."
             sleep 5
           done
-
+      
       - name: Compile Code (mvn compile)
-        # Étape 1 : Vérifie uniquement la validité du code source et sa compilation.
         run: mvn -B compile --file pom.xml
 
       - name: Run Unit and Integration Tests (mvn test)
-        # Étape 2 : Exécute tous les tests unitaires et d'intégration.
         run: mvn -B test --file pom.xml
         env:
-          # Variables d'environnement pour la connexion aux tests
+          # IMPORTANT : Utilisez maintenant le nom du conteneur dans l'URL si vous exposez uniquement le port
+          # Si le conteneur est sur le même réseau et vous n'utilisez PAS -p 3306:3306,
+          # vous utiliseriez: jdbc:mysql://mysql-spring:3306/gestparc_db
+          # Avec -p 3306:3306, l'accès local est souvent le plus simple dans un runner.
           SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/gestparc_db
-          SPRING_DATASOURCE_USERNAME: admin
-          SPRING_DATASOURCE_PASSWORD: 123456
-
-      - name: Package Application (mvn package)
-        # Étape 3 : Crée l'artefact final (JAR ou WAR) si les tests ont réussi.
-        run: mvn -B package --file pom.xml
+          SPRING_DATASOURCE_USERNAME: root # Utilisateur root avec mot de passe vide
+          SPRING_DATASOURCE_PASSWORD: '' # Mot de passe vide
+          
+      # ... (Reste des étapes de package et Docker) ...
         
       # ------------------------------------------------------------------
       # ÉTAPES DE LIVRAISON (DOCKER BUILD & PUSH)
