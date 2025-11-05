@@ -36,21 +36,18 @@ jobs:
       mysql:
         image: mysql:8.0
         env:
-          # Variables nécessaires à l'initialisation de la base de données
+          # (Vos variables d'environnement sont bien gérées ici)
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: gestparc_db
           MYSQL_USER: admin
           MYSQL_PASSWORD: 123456
         ports:
-          # Mappe le port du conteneur au port du runner pour l'accès
           - 3306:3306
         options: >-
-          # Configuration du health check pour s'assurer que MySQL est prêt
           --health-cmd="mysqladmin ping -h localhost -uroot -proot"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
-
     # ======================================================================
     # ÉTAPES D'EXÉCUTION (STEPS)
     # Liste des commandes et actions à exécuter séquentiellement.
