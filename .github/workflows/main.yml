@@ -39,11 +39,14 @@ jobs:
       run: docker push ${{ secrets.DOCKER_USERNAME }}/client:${{ github.sha }}
 
     - name: Push updated manifests to GitOps repo
+      env:
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
       run: |
-        git clone https://github.com/mousseta/client.git
+        git clone https://x-access-token:${GH_TOKEN}@github.com/mousseta/client.git
         cd client
         sed -i "s|image: .*|image: ${{ secrets.DOCKER_USERNAME }}/client:${{ github.sha }}|" clientservice-deployment.yaml
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
         git commit -am "Update image to ${{ github.sha }}"
         git push
+
