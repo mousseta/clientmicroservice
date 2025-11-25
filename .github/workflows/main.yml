@@ -1,128 +1,49 @@
-# workflow11111
-#======================================================================
-# NOM DU WORKFLOW
-# Définit le nom qui apparaîtra dans l'interface GitHub Actions.
-# ======================================================================
-name: Java CI with Maven
+name: Java CI/CD with GitOps
 
-# ======================================================================
-# ÉVÉNEMENTS DÉCLENCHEURS (TRIGGERS)
-# Définit les événements qui lanceront ce workflow.
-# Il s'exécutera lors d'un 'push' ou d'une 'pull_request' ciblant la branche 'main'.
-# ======================================================================
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 
-# ======================================================================
-# DÉFINITION DES JOBS
-# Contient les tâches à exécuter. Ici, un seul job nommé 'build'.
-# ======================================================================
 jobs:
-  build:
-    # ------------------------------------------------------------------
-    # RUNNER
-    # Spécifie que le job doit s'exécuter sur un runner auto-hébergé.
-    # ------------------------------------------------------------------
-    runs-on: self-hosted
-
-# ... (Partie on: et jobs: build: runs-on: self-hosted)
-
-# 🛑 ATTENTION : SUPPRIMEZ INTÉGRALEMENT LE BLOC 'services:' DU WORKFLOW
+  build-and-deploy:
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      # ------------------------------------------------------------------
-      # NOUVELLE ÉTAPE : CRÉER LE RÉSEAU (si nécessaire)
-      # ------------------------------------------------------------------
-      - name: Setup Docker Network
-        run: docker network create spring-net || true
-        # '|| true' évite l'échec si le réseau existe déjà (pour les tests locaux/retry)
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
 
-      # ------------------------------------------------------------------
-      # NOUVELLE ÉTAPE : DÉMARRAGE DU CONTENEUR MYSQL 
-      # ------------------------------------------------------------------
-      - name: Start MySQL Container
-        run: |
-          docker run -d \
-            --name mysql-spring \
-            --network spring-net \
-            -p 3306:3306 \
-            -e MYSQL_ALLOW_EMPTY_PASSWORD=yes \
-            -e MYSQL_DATABASE=gestparc_db \
-            -v ${{ github.workspace }}/init.sql:/docker-entrypoint-initdb.d/init.sql \
-            -v mysql_data:/var/lib/mysql \
-            mysql:8
-        # Utilisez 'github.workspace' pour référencer le chemin absolu de 'init.sql'
+    - name: Build with Maven
+      run: mvn -B package --file pom.xml
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-          
-      - name: Wait for MySQL
-        # Le ping doit cibler le conteneur, mais puisque le port 3306 est exposé, l'attente locale fonctionne.
-        run: |
-          echo "Waiting for MySQL to start..."
-          for i in {1..10}; do
-            # Utilise l'accès local car le port 3306 est exposé (-p 3306:3306)
-            if mysqladmin ping -h127.0.0.1 -uroot --silent; then
-              echo "MySQL is up!"
-              break
-            fi
-            echo "Waiting..."
-            sleep 5
-          done
-      
-      - name: Compile Code (mvn compile)
-        run: mvn -B compile --file pom.xml
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
 
-      - name: Run Unit and Integration Tests (mvn test)
-        run: mvn -B test --file pom.xml
-        env:
-          # IMPORTANT : Utilisez maintenant le nom du conteneur dans l'URL si vous exposez uniquement le port
-          # Si le conteneur est sur le même réseau et vous n'utilisez PAS -p 3306:3306,
-          # vous utiliseriez: jdbc:mysql://mysql-spring:3306/gestparc_db
-          # Avec -p 3306:3306, l'accès local est souvent le plus simple dans un runner.
-          SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/gestparc_db
-          SPRING_DATASOURCE_USERNAME: root # Utilisateur root avec mot de passe vide
-          SPRING_DATASOURCE_PASSWORD: '' # Mot de passe vide
-          
-      # ... (Reste des étapes de package et Docker) ...
-        
-      # ------------------------------------------------------------------
-      # ÉTAPES DE LIVRAISON (DOCKER BUILD & PUSH)
-      # Ces étapes sont conditionnelles et s'exécutent uniquement sur 'main'.
-      # ------------------------------------------------------------------
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Set up Docker Buildx
-        if: github.ref == 'refs/heads/main'
-        # Configure l'outil Docker Buildx pour une construction avancée
-        uses: docker/setup-buildx-action@v3
+    - name: Build Docker image
+      run: docker build -t ${{ secrets.DOCKER_USERNAME }}/client:${{ github.sha }} .
 
-      - name: Log in to Docker Hub
-        if: github.ref == 'refs/heads/main'
-        # Authentifie le runner pour pouvoir pousser l'image
-        uses: docker/login-action@v2 
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }} 
-          password: ${{ secrets.DOCKER_PASSWORD }} 
-          
-      - name: Build Docker image
-        if: github.ref == 'refs/heads/main'
-        # Construit l'image Docker en utilisant le Dockerfile du dépôt
-        run: docker build -t gestparc-app:local .
+    - name: Push Docker image to Docker Hub
+      run: docker push ${{ secrets.DOCKER_USERNAME }}/client:${{ github.sha }}
 
-      - name: Tag and Push Docker image to Docker Hub
-        if: github.ref == 'refs/heads/main'
-        # Tag l'image avec le nom de dépôt complet et la pousse sur Docker Hub
-        run: |
-          # Tag : utilise le secret DOCKER_USERNAME et le tag 'latest'
-          docker tag gestparc-app:local ${{ secrets.DOCKER_USERNAME }}/gestparc-app:latest
-          # Push : envoie l'image tagguée au registre
-          docker push ${{ secrets.DOCKER_USERNAME }}/gestparc-app:latest
+    - name: Push updated manifests to GitOps repo
+      run: |
+        git clone https://github.com/mousseta/client.git
+        cd client
+        sed -i "s|image: .*|image: ${{ secrets.DOCKER_USERNAME }}/client:${{ github.sha }}|" clientservice-deployment.yaml
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git commit -am "Update image to ${{ github.sha }}"
+        git push
